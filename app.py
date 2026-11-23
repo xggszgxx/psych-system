@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify, render_template_string, make_response
 
 app = Flask(__name__)
 ADMIN_PASSWORD = "PsychAdmin2026"
+# 使用 /tmp 目录，适配云端环境的可写权限
 DB_PATH = "/tmp/psych_data.db"
 
 def get_db_conn():
@@ -230,3 +231,11 @@ def export():
     response.headers["Content-Disposition"] = "attachment; filename=psych_data.csv"
     response.headers["Content-type"] = "text/csv; charset=utf-8-sig"
     return response
+
+# ================= 关键补充：启动服务 =================
+if __name__ == '__main__':
+    # 云端平台会自动分配 PORT 环境变量，如果没有则默认使用 8000
+    port = int(os.environ.get("PORT", 8000))
+    print(f"服务正在启动，监听端口: {port}")
+    # 必须监听 0.0.0.0，才能让公网访问
+    app.run(host='0.0.0.0', port=port)
