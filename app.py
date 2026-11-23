@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import psycopg2
 import datetime
 import csv
 import io
@@ -8,22 +8,31 @@ from waitress import serve
 
 app = Flask(__name__)
 
-# --- 配置区（重要） ---
-ADMIN_PASSWORD = "PsychAdmin2026" # 教师后台密码，请自行修改为复杂的密码！
-DB_PATH = "psych_data.db"         # 数据库文件路径
+# --- 配置区 ---
+ADMIN_PASSWORD = "PsychAdmin2026"
+# 从 Koyeb 的环境变量中读取数据库链接，如果没有则抛出错误
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # --- 数据库初始化 ---
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute('''CREATE TABLE IF NOT EXISTS results
-                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+    if not DATABASE_URL:
+        print("警告：未设置 DATABASE_URL 环境变量！")
+        return
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    # PostgreSQL 语法：AUTOINCREMENT 换成 SERIAL
+    cur.execute('''CREATE TABLE IF NOT EXISTS results
+                    (id SERIAL PRIMARY KEY,
                     time TEXT, sid TEXT, score REAL, level TEXT, 
                     d1 REAL, d2 REAL, d3 REAL, d4 REAL, d5 REAL)''')
     conn.commit()
+    cur.close()
     conn.close()
+
+# 启动时初始化数据库
 init_db()
 
-# --- 前端 HTML (包含免责声明) ---
+# --- 前端 HTML (保持不变) ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -192,11 +201,14 @@ def submit():
         advice = "<b>你拥有极其敏锐的觉察力。</b><br><br>你能清晰地看到自己的想法和情绪起伏。请继续保持这份清明。"
         level, color = "蓝色（关注级）", "#3498db"
 
-    # 存入本地 SQLite 数据库
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("INSERT INTO results (time, sid, score, level, d1, d2, d3, d4, d5) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    # 存入 PostgreSQL 数据库
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    # PostgreSQL 占位符使用 %s
+    cur.execute("INSERT INTO results (time, sid, score, level, d1, d2, d3, d4, d5) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                  (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sid, total_avg, level, *dim_percent_scores))
     conn.commit()
+    cur.close()
     conn.close()
 
     return jsonify({'status': 'success', 'quote': quote, 'advice': advice})
@@ -209,9 +221,11 @@ def admin():
     html = "<h2 style='font-family:微软雅黑; text-align:center;'>心理测评预警看板</h2>"
     html += "<div style='text-align:center; margin-bottom:20px;'><a href='/export?pwd=" + ADMIN_PASSWORD + "' style='padding:10px 20px; background:#2c3e50; color:white; text-decoration:none; border-radius:4px;'>📥 导出数据 (CSV)</a></div>"
     
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5 FROM results ORDER BY id DESC")
-    rows = cursor.fetchall()
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5 FROM results ORDER BY id DESC")
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
 
     html += "<table border='1' cellpadding='10' style='border-collapse:collapse; width:100%; max-width:900px; margin:auto; text-align:center; font-family:微软雅黑; font-size:14px;'>"
@@ -226,9 +240,12 @@ def admin():
 def export():
     if request.args.get('pwd') != ADMIN_PASSWORD:
         return "无权访问"
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5 FROM results")
-    rows = cursor.fetchall()
+    
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5 FROM results")
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
 
     if not rows: return "暂无数据"
