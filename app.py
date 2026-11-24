@@ -4,66 +4,14 @@ import datetime
 import csv
 import io
 from flask import Flask, request, jsonify, render_template_string, make_response
+from urllib.parse import quote
 
 app = Flask(__name__)
 ADMIN_PASSWORD = "PsychAdmin2026"
-# 使用 /tmp 目录，适配云端环境的可写权限
 DB_PATH = "/tmp/psych_data.db"
 
-# ====================== 维度与对策配置 ======================
+# 维度名称配置
 DIM_NAMES = ["情绪稳定性", "自我认知", "性格倾向", "社交能力", "压力应对"]
-DIM_NAMES_SHORT = ["情绪", "认知", "性格", "社交", "应对"]
-
-# 每个维度对应的干预对策
-DIM_ADVICE_MAP = {
-    0: {
-        "name": "情绪稳定性",
-        "issue": "情绪觉察力偏低，易被情绪裹挟，难以识别身体的情绪信号",
-        "action": "【情绪命名+呼吸调节】一对一情绪识别训练，教学生给情绪命名；每日3分钟正念呼吸练习，学会在情绪来临时先观察而非反应"
-    },
-    1: {
-        "name": "自我认知",
-        "issue": "难以区分事实与想法，易陷入自我否定，自动负向思维较多",
-        "action": "【认知解离训练】填写「想法-事实」两栏记录表，将「我不够好」等负向信念归为想法而非事实；引导学生主动寻找反证，打破思维自动化"
-    },
-    2: {
-        "name": "性格倾向",
-        "issue": "自我觉察不足，易习惯性迎合他人、戴面具，存在较多无意识重复行为",
-        "action": "【自我观察练习】布置每日自我观察日记，记录迎合他人的场景与感受；从小事开始练习真实表达需求，逐步摘掉社交面具"
-    },
-    3: {
-        "name": "社交能力",
-        "issue": "社交中倾听不足，易产生比较、嫉妒心理，难以坦然拒绝，对独处/热闹存在依赖",
-        "action": "【倾听与边界训练】练习倾听复述法，不打断他人；用非暴力沟通四步（观察-感受-需要-请求）表达；从小事练习坦然说「不」，建立健康人际边界"
-    },
-    4: {
-        "name": "压力应对",
-        "issue": "压力下难以觉察身体信号，易追求完美、找借口，难以直面挫折",
-        "action": "【压力源梳理+呼吸调节】共同梳理可控/不可控压力源清单；考前练习节律呼吸，在呼吸急促时主动调整；练习直面挫折而非先找责任人"
-    }
-}
-
-# 各等级对应的整体处置时限
-LEVEL_ACTION_MAP = {
-    "红色（紧急级）": "【24-48小时内处置】心理老师一对一约谈+班主任日常观察+评估是否转介，重点关注危机信号",
-    "橙色（干预级）": "【一周内处置】一对一或小组心理辅导，两周后复测追踪变化",
-    "黄色（辅导级）": "【常规关注】融入心理健康课团体辅导，每月复测防止向红色转化",
-    "蓝色（关注级）": "【正常关注】无需特殊干预，可邀请参与朋辈心理支持活动"
-}
-
-
-def generate_countermeasure(level, d_scores):
-    """根据总分等级和五维分数，生成个性化干预对策"""
-    # 找到得分最低的维度
-    min_d_idx = d_scores.index(min(d_scores))
-    min_d_info = DIM_ADVICE_MAP[min_d_idx]
-    
-    # 整体等级处置建议
-    level_action = LEVEL_ACTION_MAP.get(level, "")
-    
-    # 组合对策：等级要求 + 短板维度干预
-    advice = f"【短板维度：{min_d_info['name']}（{min(d_scores):.1f}分）】问题：{min_d_info['issue']}。干预方案：{min_d_info['action']}。{level_action}"
-    return advice
 
 
 def get_db_conn():
@@ -71,9 +19,40 @@ def get_db_conn():
     conn.execute('''CREATE TABLE IF NOT EXISTS results
                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
                     time TEXT, sid TEXT, score REAL, level TEXT,
-                    d1 REAL, d2 REAL, d3 REAL, d4 REAL, d5 REAL)''')
+                    d1 REAL, d2 REAL, d3 REAL, d4 REAL, d5 REAL,
+                    positive_count INTEGER DEFAULT 0)''')
+    # 兼容旧数据：自动新增阳性项目数字段
+    try:
+        conn.execute("ALTER TABLE results ADD COLUMN positive_count INTEGER DEFAULT 0")
+    except:
+        pass
     conn.commit()
     return conn
+
+
+def generate_intelligent_analysis(score, level, positive_count, d_scores):
+    """完全匹配SCL-90报告格式，生成智能分析结论"""
+    # 识别超标维度（<40分即能力不足）
+    over_dims = []
+    for i in range(5):
+        if d_scores[i] < 40:
+            over_dims.append(DIM_NAMES[i])
+    over_count = len(over_dims)
+    over_dims_str = "、".join(over_dims) if over_dims else "无"
+
+    # 识别无效作答：答案完全一致（全选同一选项）
+    is_invalid = (positive_count == 22) or (positive_count == 0 and score < 95)
+
+    if is_invalid:
+        return "⚠️ 高度疑似随意作答（答案模式异常），不计入统计，请单独约谈核实是否如实作答。"
+    elif "红色" in level:
+        return f"总分{score}，阳性项目{positive_count}项。{over_count}个因子超标({over_dims_str})。建议立即进行专业心理评估与干预。"
+    elif "橙色" in level:
+        return f"总分{score}，阳性项目{positive_count}项。{over_count}个因子超标({over_dims_str})。建议一周内开展一对一/小组心理辅导，两周后复测。"
+    elif "黄色" in level:
+        return f"总分{score}，阳性项目{positive_count}项。待提升维度：{over_dims_str}。建议关注情绪变化，适当自我调节。"
+    else: # 蓝色正常
+        return "各项指标均在正常范围内，心理健康状况良好。"
 
 
 HTML_PAGE = """
@@ -199,6 +178,7 @@ def submit():
     if not sid or len(answers) != 22:
         return jsonify({'error': '数据不完整'}), 400
 
+    # 计算五维得分
     dim_raw_scores = [0, 0, 0, 0, 0]
     dim_counts = [5, 4, 4, 5, 4]
     current_idx = 0
@@ -212,6 +192,10 @@ def submit():
     dim_percent_scores = [round(dim_raw_scores[i] / (dim_counts[i] * 5) * 100, 1) for i in range(5)]
     total_avg = round(sum(dim_percent_scores) / 5, 1)
 
+    # 计算阳性项目数（选1/2即从未/偶尔觉察，属于短板项目）
+    positive_count = sum(1 for ans in answers if ans <= 2)
+
+    # 判定预警等级
     if total_avg < 40:
         quote = "“观察而不评判，是最高形式的智慧。当你不再给感受贴标签，你就自由了。”"
         advice = "你最近可能被各种思绪和情绪裹挟了。</b>请不要自责。试着对自己说：『我观察到我现在很烦躁，我感到胸口有点闷，我需要一点空间。』"
@@ -229,9 +213,10 @@ def submit():
         advice = "你拥有极其敏锐的觉察力。</b>你能清晰地看到自己的想法和情绪起伏。请继续保持这份清明。"
         level, color = "蓝色（关注级）", "#3498db"
 
+    # 存入数据库
     conn = get_db_conn()
-    conn.execute("INSERT INTO results (time, sid, score, level, d1, d2, d3, d4, d5) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                 (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sid, total_avg, level, *dim_percent_scores))
+    conn.execute("INSERT INTO results (time, sid, score, level, d1, d2, d3, d4, d5, positive_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sid, total_avg, level, *dim_percent_scores, positive_count))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success', 'quote': quote, 'advice': advice})
@@ -242,38 +227,39 @@ def admin():
     if request.args.get('pwd') != ADMIN_PASSWORD:
         return "<h2 style='color:red; text-align:center; margin-top:50px;'>🔒 无权访问。请使用正确密码访问，例如：/admin?pwd=密码</h2>"
 
-    from urllib.parse import quote
     html = "<h2 style='font-family:微软雅黑; text-align:center;'>心理测评预警看板</h2>"
     html += "<div style='text-align:center; margin-bottom:20px;'>"
     html += "<a href='/export?pwd=" + quote(ADMIN_PASSWORD) + "' style='padding:10px 20px; background:#2c3e50; color:white; text-decoration:none; border-radius:4px; margin-right:10px;'>📥 导出数据 (CSV)</a>"
-    html += "<span style='color:#7f8c8d; font-size:14px; margin-left:10px;'>系统自动按最低维度生成个性化干预对策</span>"
+    html += "<span style='color:#7f8c8d; font-size:14px;'>系统自动生成智能分析与干预建议</span>"
     html += "</div>"
 
     conn = get_db_conn()
-    cursor = conn.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5 FROM results ORDER BY id DESC")
+    cursor = conn.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5, positive_count FROM results ORDER BY id DESC")
     rows = cursor.fetchall()
     conn.close()
 
     html += "<table border='1' cellpadding='8' style='border-collapse:collapse; width:98%; margin:auto; text-align:center; font-family:微软雅黑; font-size:13px;'>"
     html += "<tr style='background:#ecf0f1;'>"
-    html += "时间</th>学号</th>总分</th>预警等级</th>情绪</th>认知</th>性格</th>社交</th>应对</th><th style='width:320px;'>建议对策</th>"
+    html += "时间</th>学号</th>总分</th>预警等级</th>情绪</th>认知</th>性格</th>社交</th>应对</th>阳性项目数</th><th style='width:350px;'>智能分析</th>"
     html += "</tr>"
 
     for r in rows:
-        level = r[3]
-        d_scores = list(r[4:9])
-        countermeasure = generate_countermeasure(level, d_scores)
+        time, sid, score, level, d1, d2, d3, d4, d5, positive_count = r
+        d_scores = [d1, d2, d3, d4, d5]
+        analysis = generate_intelligent_analysis(score, level, positive_count, d_scores)
 
-        color = "#3498db" if "蓝色" in level else "#f1c40f" if "黄色" in level else "#f39c12" if "橙色" in level else "#e74c3c"
+        # 行底色和等级颜色
+        level_color = "#3498db" if "蓝色" in level else "#f1c40f" if "黄色" in level else "#f39c12" if "橙色" in level else "#e74c3c"
         bg_color = "#fef5f5" if "红色" in level else "#fffbf0" if "橙色" in level else "#fefff0" if "黄色" in level else "#f0f8ff"
 
         html += f"<tr style='background:{bg_color};'>"
-        html += f"{r[0]}</td>"
-        html += f"{r[1]}</td>"
-        html += f"{r[2]}</td>"
-        html += f"<td style='color:{color}; font-weight:bold;'>{r[3]}</td>"
-        html += f"{r[4]}</td>{r[5]}</td>{r[6]}</td>{r[7]}</td>{r[8]}</td>"
-        html += f"<td style='text-align:left; font-size:12px; line-height:1.5; padding:8px;'>{countermeasure}</td>"
+        html += f"{time}</td>"
+        html += f"{sid}</td>"
+        html += f"{score}</td>"
+        html += f"<td style='color:{level_color}; font-weight:bold;'>{level}</td>"
+        html += f"{d1}</td>{d2}</td>{d3}</td>{d4}</td>{d5}</td>"
+        html += f"{positive_count}</td>"
+        html += f"<td style='text-align:left; font-size:12px; line-height:1.5; padding:8px;'>{analysis}</td>"
         html += "</tr>"
 
     html += "</table>"
@@ -285,7 +271,7 @@ def export():
     if request.args.get('pwd') != ADMIN_PASSWORD:
         return "无权访问"
     conn = get_db_conn()
-    cursor = conn.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5 FROM results ORDER BY id DESC")
+    cursor = conn.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5, positive_count FROM results ORDER BY id DESC")
     rows = cursor.fetchall()
     conn.close()
     if not rows:
@@ -293,12 +279,12 @@ def export():
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['时间', '学号', '觉察指数', '预警等级', '情绪稳定性', '自我认知', '性格倾向', '社交能力', '压力应对', '建议对策'])
+    writer.writerow(['时间', '学号', '觉察指数', '预警等级', '情绪稳定性', '自我认知', '性格倾向', '社交能力', '压力应对', '阳性项目数', '智能分析'])
     for r in rows:
-        level = r[3]
-        d_scores = list(r[4:9])
-        countermeasure = generate_countermeasure(level, d_scores)
-        writer.writerow(list(r) + [countermeasure])
+        time, sid, score, level, d1, d2, d3, d4, d5, positive_count = r
+        d_scores = [d1, d2, d3, d4, d5]
+        analysis = generate_intelligent_analysis(score, level, positive_count, d_scores)
+        writer.writerow(list(r) + [analysis])
 
     response = make_response(output.getvalue().encode('utf-8-sig'))
     response.headers["Content-Disposition"] = "attachment; filename=psych_data.csv"
@@ -306,7 +292,6 @@ def export():
     return response
 
 
-# ================= 启动服务 =================
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8000))
     print(f"服务正在启动，监听端口: {port}")
