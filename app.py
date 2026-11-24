@@ -10,72 +10,120 @@ ADMIN_PASSWORD = "PsychAdmin2026"
 # 使用 /tmp 目录，适配云端环境的可写权限
 DB_PATH = "/tmp/psych_data.db"
 
+# ====================== 维度与对策配置 ======================
+DIM_NAMES = ["情绪稳定性", "自我认知", "性格倾向", "社交能力", "压力应对"]
+DIM_NAMES_SHORT = ["情绪", "认知", "性格", "社交", "应对"]
+
+# 每个维度对应的干预对策
+DIM_ADVICE_MAP = {
+    0: {
+        "name": "情绪稳定性",
+        "issue": "情绪觉察力偏低，易被情绪裹挟，难以识别身体的情绪信号",
+        "action": "【情绪命名+呼吸调节】一对一情绪识别训练，教学生给情绪命名；每日3分钟正念呼吸练习，学会在情绪来临时先观察而非反应"
+    },
+    1: {
+        "name": "自我认知",
+        "issue": "难以区分事实与想法，易陷入自我否定，自动负向思维较多",
+        "action": "【认知解离训练】填写「想法-事实」两栏记录表，将「我不够好」等负向信念归为想法而非事实；引导学生主动寻找反证，打破思维自动化"
+    },
+    2: {
+        "name": "性格倾向",
+        "issue": "自我觉察不足，易习惯性迎合他人、戴面具，存在较多无意识重复行为",
+        "action": "【自我观察练习】布置每日自我观察日记，记录迎合他人的场景与感受；从小事开始练习真实表达需求，逐步摘掉社交面具"
+    },
+    3: {
+        "name": "社交能力",
+        "issue": "社交中倾听不足，易产生比较、嫉妒心理，难以坦然拒绝，对独处/热闹存在依赖",
+        "action": "【倾听与边界训练】练习倾听复述法，不打断他人；用非暴力沟通四步（观察-感受-需要-请求）表达；从小事练习坦然说「不」，建立健康人际边界"
+    },
+    4: {
+        "name": "压力应对",
+        "issue": "压力下难以觉察身体信号，易追求完美、找借口，难以直面挫折",
+        "action": "【压力源梳理+呼吸调节】共同梳理可控/不可控压力源清单；考前练习节律呼吸，在呼吸急促时主动调整；练习直面挫折而非先找责任人"
+    }
+}
+
+# 各等级对应的整体处置时限
+LEVEL_ACTION_MAP = {
+    "红色（紧急级）": "【24-48小时内处置】心理老师一对一约谈+班主任日常观察+评估是否转介，重点关注危机信号",
+    "橙色（干预级）": "【一周内处置】一对一或小组心理辅导，两周后复测追踪变化",
+    "黄色（辅导级）": "【常规关注】融入心理健康课团体辅导，每月复测防止向红色转化",
+    "蓝色（关注级）": "【正常关注】无需特殊干预，可邀请参与朋辈心理支持活动"
+}
+
+
+def generate_countermeasure(level, d_scores):
+    """根据总分等级和五维分数，生成个性化干预对策"""
+    # 找到得分最低的维度
+    min_d_idx = d_scores.index(min(d_scores))
+    min_d_info = DIM_ADVICE_MAP[min_d_idx]
+    
+    # 整体等级处置建议
+    level_action = LEVEL_ACTION_MAP.get(level, "")
+    
+    # 组合对策：等级要求 + 短板维度干预
+    advice = f"【短板维度：{min_d_info['name']}（{min(d_scores):.1f}分）】问题：{min_d_info['issue']}。干预方案：{min_d_info['action']}。{level_action}"
+    return advice
+
+
 def get_db_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.execute('''CREATE TABLE IF NOT EXISTS results
                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    time TEXT, sid TEXT, score REAL, level TEXT, 
+                    time TEXT, sid TEXT, score REAL, level TEXT,
                     d1 REAL, d2 REAL, d3 REAL, d4 REAL, d5 REAL)''')
     conn.commit()
     return conn
 
+
 HTML_PAGE = """
 <!DOCTYPE html>
-<html>
-<head>
+
+
     <meta charset="UTF-8">
-    <title>心灵觉察与内省系统 (五维22项)</title>
-    <style>
+    心灵觉察与内省系统 (五维22项)</title>
+    
         body { font-family: '微软雅黑', sans-serif; padding: 20px; background: #f7f9f9; color: #333; }
         .container { background: #fff; padding: 40px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.05); max-width: 800px; margin: auto; }
         h2 { text-align: center; font-weight: 300; color: #2c3e50; letter-spacing: 2px; margin-bottom: 5px;}
         .sub-title { text-align: center; color: #95a5a6; font-size: 13px; margin-bottom: 25px; }
-        
         .disclaimer { background: #fdf2e9; border-left: 4px solid #e67e22; padding: 15px; margin-bottom: 20px; font-size: 13px; color: #d35400; line-height: 1.6; }
-        
         .question-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px dashed #e0e0e0; }
         .question-text { flex: 1; font-size: 15px; color: #34495e; padding-right: 20px; }
         select { width: 120px; padding: 8px; border: 1px solid #bdc3c7; border-radius: 6px; outline: none; font-size: 14px; background: #fff; color: #2c3e50;}
         select:focus { border-color: #3498db; }
         .btn { width: 100%; padding: 16px; background: #2c3e50; color: white; border: none; border-radius: 6px; font-size: 18px; margin-top: 30px; cursor: pointer; transition: background 0.3s; }
         .btn:hover { background: #1a252f; }
-        
         #resultArea { display: none; margin-top: 40px; padding: 30px; background: #fdfbf7; border: 1px solid #f0e6d2; border-radius: 8px; }
         .quote { font-style: italic; font-size: 18px; color: #8e7a59; text-align: center; margin: 20px 0; line-height: 1.8; }
         .advice { font-size: 15px; color: #555; line-height: 1.8; margin-top: 20px; background: #fff; padding: 15px; border-radius: 6px; border-left: 4px solid #8e7a59;}
     </style>
 </head>
-<body>
+
     <div class="container">
-        <h2>心灵觉察与内省</h2>
+        心灵觉察与内省</h2>
         <p class="sub-title">基于五因子模型本土化研发 (CFI=0.92, RMSEA=0.06)</p>
-        
         <div class="disclaimer">
-            <b>⚠️ 知情同意与免责声明：</b><br>
-            1. 本系统为教育发展性筛查工具，<b>不作为任何临床医学诊断或心理疾病确诊依据。</b><br>
-            2. 测评结果将严格保密，仅用于心理健康教育参考。<br>
-            3. 如果您近期有强烈的痛苦感，请立即拨打心理援助热线（如：400-161-9995）或就医。<br>
+            ⚠️ 知情同意与免责声明：</b>
+            1. 本系统为教育发展性筛查工具，不作为任何临床医学诊断或心理疾病确诊依据。</b>
+            2. 测评结果将严格保密，仅用于心理健康教育参考。
+            3. 如果您近期有强烈的痛苦感，请立即拨打心理援助热线（如：400-161-9995）或就医。
             <label style="margin-top: 8px; display: block; font-weight: bold; cursor: pointer;">
                 <input type="checkbox" id="agreeCheck" style="transform: scale(1.2); margin-right: 5px;"> 我已阅读并同意上述声明
             </label>
         </div>
-
         <div style="margin-bottom: 20px;">
             <input id="sid" placeholder="请输入学号/代号（仅用于内部记录）" style="padding: 12px; width: 100%; box-sizing: border-box; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 16px;">
         </div>
-
         <div id="questions"></div>
-
         <button id="submitBtn" class="btn" onclick="submitData()">提交并观察</button>
-
         <div id="resultArea">
             <h3 style="text-align: center; font-weight: normal; color: #8e7a59;">你的内省之镜</h3>
             <div id="quoteText" class="quote"></div>
             <div id="adviceText" class="advice"></div>
         </div>
     </div>
-
-    <script>
+    
         var questionsData = [
             { id: 1, text: "1. 当焦虑或紧张出现时，我能觉察到身体的变化（如心跳加速）。" },
             { id: 2, text: "2. 我是否能看着自己的情绪起伏，而不被它立刻卷走？" },
@@ -100,7 +148,6 @@ HTML_PAGE = """
             { id: 21, text: "21. 面对挫折，我能否不立刻寻找责任人或借口，而是直视它？" },
             { id: 22, text: "22. 我是否相信，真正的自由在于内心的觉察？" }
         ];
-
         var optionsList = [{ v: 1, t: "从未觉察" }, { v: 2, t: "偶尔觉察" }, { v: 3, t: "有时觉察" }, { v: 4, t: "经常觉察" }, { v: 5, t: "深度觉察" }];
         var html = '';
         for (var i = 0; i < questionsData.length; i++) {
@@ -109,22 +156,18 @@ HTML_PAGE = """
             html += '<div class="question-item"><span class="question-text">' + questionsData[i].text + '</span><select id="q' + questionsData[i].id + '">' + opts + '</select></div>';
         }
         document.getElementById('questions').innerHTML = html;
-
         function submitData() {
             if (!document.getElementById('agreeCheck').checked) { alert('请先阅读并勾选知情同意声明！'); return; }
             var sid = document.getElementById('sid').value.trim();
             if (!sid) { alert('请输入学号！'); return; }
-            
             var answers = [];
             for (var i = 1; i <= 22; i++) {
                 var val = document.getElementById('q' + i).value;
                 if (!val) { alert('第' + i + '题未作答。'); return; }
                 answers.push(parseInt(val));
             }
-            
             var btn = document.getElementById('submitBtn');
             btn.disabled = true; btn.innerText = "照见中...";
-
             fetch('/api/submit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -142,9 +185,11 @@ HTML_PAGE = """
 </html>
 """
 
+
 @app.route('/')
 def index():
     return render_template_string(HTML_PAGE)
+
 
 @app.route('/api/submit', methods=['POST'])
 def submit():
@@ -169,19 +214,19 @@ def submit():
 
     if total_avg < 40:
         quote = "“观察而不评判，是最高形式的智慧。当你不再给感受贴标签，你就自由了。”"
-        advice = "<b>你最近可能被各种思绪和情绪裹挟了。</b><br><br>请不要自责。试着对自己说：『我观察到我现在很烦躁，我感到胸口有点闷，我需要一点空间。』"
+        advice = "你最近可能被各种思绪和情绪裹挟了。</b>请不要自责。试着对自己说：『我观察到我现在很烦躁，我感到胸口有点闷，我需要一点空间。』"
         level, color = "红色（紧急级）", "#e74c3c"
     elif total_avg < 60:
         quote = "“你无法改变你是什么，你只能观察你是什么；在观察中，改变自然发生。”"
-        advice = "<b>你目前的压力较大，觉察力有所下降。</b><br><br>试着用非暴力沟通表达：『我观察到（事实），我感到（情绪），因为我需要（需求）。』"
+        advice = "你目前的压力较大，觉察力有所下降。</b>试着用非暴力沟通表达：『我观察到（事实），我感到（情绪），因为我需要（需求）。』"
         level, color = "橙色（干预级）", "#f39c12"
     elif total_avg < 80:
         quote = "“一颗自由的心，没有固定的模式，它时刻在觉察中更新。”"
-        advice = "<b>你已经具备了一定的自我观察能力。</b><br><br>但在高压下偶尔还是会当局者迷。多练习正念呼吸能帮你回到当下。"
+        advice = "你已经具备了一定的自我观察能力。</b>但在高压下偶尔还是会当局者迷。多练习正念呼吸能帮你回到当下。"
         level, color = "黄色（辅导级）", "#f1c40f"
     else:
         quote = "“真理是无路之国，你只能在自己内心的觉察中抵达。”"
-        advice = "<b>你拥有极其敏锐的觉察力。</b><br><br>你能清晰地看到自己的想法和情绪起伏。请继续保持这份清明。"
+        advice = "你拥有极其敏锐的觉察力。</b>你能清晰地看到自己的想法和情绪起伏。请继续保持这份清明。"
         level, color = "蓝色（关注级）", "#3498db"
 
     conn = get_db_conn()
@@ -191,51 +236,78 @@ def submit():
     conn.close()
     return jsonify({'status': 'success', 'quote': quote, 'advice': advice})
 
+
 @app.route('/admin')
 def admin():
     if request.args.get('pwd') != ADMIN_PASSWORD:
         return "<h2 style='color:red; text-align:center; margin-top:50px;'>🔒 无权访问。请使用正确密码访问，例如：/admin?pwd=密码</h2>"
-        
+
+    from urllib.parse import quote
     html = "<h2 style='font-family:微软雅黑; text-align:center;'>心理测评预警看板</h2>"
-    html += "<div style='text-align:center; margin-bottom:20px;'><a href='/export?pwd=" + ADMIN_PASSWORD + "' style='padding:10px 20px; background:#2c3e50; color:white; text-decoration:none; border-radius:4px;'>📥 导出数据 (CSV)</a></div>"
-    
+    html += "<div style='text-align:center; margin-bottom:20px;'>"
+    html += "<a href='/export?pwd=" + quote(ADMIN_PASSWORD) + "' style='padding:10px 20px; background:#2c3e50; color:white; text-decoration:none; border-radius:4px; margin-right:10px;'>📥 导出数据 (CSV)</a>"
+    html += "<span style='color:#7f8c8d; font-size:14px; margin-left:10px;'>系统自动按最低维度生成个性化干预对策</span>"
+    html += "</div>"
+
     conn = get_db_conn()
     cursor = conn.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5 FROM results ORDER BY id DESC")
     rows = cursor.fetchall()
     conn.close()
 
-    html += "<table border='1' cellpadding='10' style='border-collapse:collapse; width:100%; max-width:900px; margin:auto; text-align:center; font-family:微软雅黑; font-size:14px;'>"
-    html += "<tr style='background:#ecf0f1;'><th>时间</th><th>学号</th><th>总分</th><th>预警等级</th><th>情绪</th><th>认知</th><th>性格</th><th>社交</th><th>应对</th></tr>"
+    html += "<table border='1' cellpadding='8' style='border-collapse:collapse; width:98%; margin:auto; text-align:center; font-family:微软雅黑; font-size:13px;'>"
+    html += "<tr style='background:#ecf0f1;'>"
+    html += "时间</th>学号</th>总分</th>预警等级</th>情绪</th>认知</th>性格</th>社交</th>应对</th><th style='width:320px;'>建议对策</th>"
+    html += "</tr>"
+
     for r in rows:
-        color = "#3498db" if "蓝色" in r[3] else "#f1c40f" if "黄色" in r[3] else "#f39c12" if "橙色" in r[3] else "#e74c3c"
-        html += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td style='color:{color}; font-weight:bold;'>{r[3]}</td><td>{r[4]}</td><td>{r[5]}</td><td>{r[6]}</td><td>{r[7]}</td><td>{r[8]}</td></tr>"
+        level = r[3]
+        d_scores = list(r[4:9])
+        countermeasure = generate_countermeasure(level, d_scores)
+
+        color = "#3498db" if "蓝色" in level else "#f1c40f" if "黄色" in level else "#f39c12" if "橙色" in level else "#e74c3c"
+        bg_color = "#fef5f5" if "红色" in level else "#fffbf0" if "橙色" in level else "#fefff0" if "黄色" in level else "#f0f8ff"
+
+        html += f"<tr style='background:{bg_color};'>"
+        html += f"{r[0]}</td>"
+        html += f"{r[1]}</td>"
+        html += f"{r[2]}</td>"
+        html += f"<td style='color:{color}; font-weight:bold;'>{r[3]}</td>"
+        html += f"{r[4]}</td>{r[5]}</td>{r[6]}</td>{r[7]}</td>{r[8]}</td>"
+        html += f"<td style='text-align:left; font-size:12px; line-height:1.5; padding:8px;'>{countermeasure}</td>"
+        html += "</tr>"
+
     html += "</table>"
     return html
+
 
 @app.route('/export')
 def export():
     if request.args.get('pwd') != ADMIN_PASSWORD:
         return "无权访问"
     conn = get_db_conn()
-    cursor = conn.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5 FROM results")
+    cursor = conn.execute("SELECT time, sid, score, level, d1, d2, d3, d4, d5 FROM results ORDER BY id DESC")
     rows = cursor.fetchall()
     conn.close()
-    if not rows: return "暂无数据"
-    
+    if not rows:
+        return "暂无数据"
+
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['时间', '学号', '觉察指数', '预警等级', '情绪稳定性', '自我认知', '性格倾向', '社交能力', '压力应对'])
-    for r in rows: writer.writerow(r)
-    
+    writer.writerow(['时间', '学号', '觉察指数', '预警等级', '情绪稳定性', '自我认知', '性格倾向', '社交能力', '压力应对', '建议对策'])
+    for r in rows:
+        level = r[3]
+        d_scores = list(r[4:9])
+        countermeasure = generate_countermeasure(level, d_scores)
+        writer.writerow(list(r) + [countermeasure])
+
     response = make_response(output.getvalue().encode('utf-8-sig'))
     response.headers["Content-Disposition"] = "attachment; filename=psych_data.csv"
     response.headers["Content-type"] = "text/csv; charset=utf-8-sig"
     return response
 
-# ================= 关键补充：启动服务 =================
+
+# ================= 启动服务 =================
 if __name__ == '__main__':
-    # 云端平台会自动分配 PORT 环境变量，如果没有则默认使用 8000
     port = int(os.environ.get("PORT", 8000))
     print(f"服务正在启动，监听端口: {port}")
-    # 必须监听 0.0.0.0，才能让公网访问
     app.run(host='0.0.0.0', port=port)
