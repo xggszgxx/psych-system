@@ -3,11 +3,15 @@ import sqlite3
 import datetime
 import csv
 import io
-from flask import Flask, request, jsonify, render_template_string, make_response
+import urllib.parse
 from urllib.parse import quote
-from flask_cors import CORS  # 👈 确保引入了跨域库
+from flask import Flask, request, jsonify, render_template_string, make_response, send_file
+from flask_cors import CORS
+from docx import Document
+from docx.shared import Pt
+from docx.oxml.ns import qn
 
-# 👇 初始化一次即可
+# ==================== 初始化配置 ====================
 app = Flask(__name__)
 CORS(app)  # 👈 允许所有跨域请求（解决小程序/网页跨域问题）
 
@@ -170,18 +174,18 @@ HTML_PAGE = """
 def index():
     return render_template_string(HTML_PAGE)
 
-# 👇 路由改成和小程序一致的 /api/psych/submit
+# ==================== 提交测评接口 ====================
 @app.route('/api/psych/submit', methods=['POST', 'OPTIONS'])
 def submit():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}) # 处理跨域预检请求
         
     data = request.json
-    # 👇 兼容小程序传的 student_id 和网页传的 sid
+    # 兼容小程序传的 student_id 和网页传的 sid
     sid = data.get('student_id') or data.get('sid') 
     answers = data.get('answers', [])
     
-    # 👇 兼容小程序传的字典格式 { "1": 5 } 和网页传的列表格式 [5, 4, 3...]
+    # 兼容小程序传的字典格式 { "1": 5 } 和网页传的列表格式 [5, 4, 3...]
     if isinstance(answers, dict):
         ans_list = [answers.get(str(i), 3) for i in range(1, 23)]
     else:
@@ -233,7 +237,6 @@ def submit():
     conn.commit()
     conn.close()
     
-    # 👇 注意：小程序期望返回 risk 和 scores，我们在这里一起返回
     return jsonify({
         'status': 'success', 
         'quote': quote, 
@@ -249,15 +252,15 @@ def submit():
         'total': total_avg
     })
 
-# 以下保留你原本的 admin 和 export 接口不变...
+# ==================== 后台管理看板 ====================
 @app.route('/admin')
 def admin():
     if request.args.get('pwd') != ADMIN_PASSWORD:
         return "<h2 style='color:red; text-align:center; margin-top:50px;'>🔒 无权访问。请使用正确密码访问，例如：/admin?pwd=密码</h2>"
-    # ... (你的 admin 代码保留不变)
+
     html = "<h2 style='font-family:微软雅黑; text-align:center;'>心理测评预警看板</h2>"
     html += "<div style='text-align:center; margin-bottom:20px;'>"
-    html += "<a href='/export?pwd=" + quote(ADMIN_PASSWORD) + "' style='padding:10px 20px; background:#2c3e50; color:white; text-decoration:none; border-radius:4px; margin-right:10px;'>📥 导出数据 (CSV)</a>"
+    html += f"<a href='/export?pwd={quote(ADMIN_PASSWORD)}' style='padding:10px 20px; background:#2c3e50; color:white; text-decoration:none; border-radius:4px; margin-right:10px;'>📥 导出数据 (CSV)</a>"
     html += "<span style='color:#7f8c8d; font-size:14px;'>系统自动生成智能分析与干预建议</span>"
     html += "</div>"
 
@@ -285,11 +288,19 @@ def admin():
         html += f"<td style='color:{level_color}; font-weight:bold;'>{level}</td>"
         html += f"<td>{d1}</td><td>{d2}</td><td>{d3}</td><td>{d4}</td><td>{d5}</td>"
         html += f"<td>{positive_count}</td>"
-        html += f"<td style='text-align:left; font-size:12px; line-height:1.5; padding:8px;'>{analysis}</td>"
+        
+        # 智能分析列 & 红色预警下载按钮
+        html += "<td style='text-align:left; font-size:12px; line-height:1.5; padding:8px;'>"
+        html += f"<div>{analysis}</div>"
+        if "红色" in level:
+            html += f"<a href='/admin/download_agreement?sid={sid}&score={score}' target='_blank' style='display:inline-block; margin-top:10px; padding:6px 12px; background-color:#e74c3c; color:white; text-decoration:none; border-radius:4px; font-weight:bold; font-size:13px;'>📄 下载家校安全协议</a>"
+        html += "</td>"
+        
         html += "</tr>"
     html += "</table>"
     return html
 
+# ==================== 导出 CSV ====================
 @app.route('/export')
 def export():
     if request.args.get('pwd') != ADMIN_PASSWORD:
@@ -307,7 +318,7 @@ def export():
     for r in rows:
         time, sid, score, level, d1, d2, d3, d4, d5, positive_count = r
         d_scores = [d1, d2, d3, d4, d5]
-        analysis = generate_intelligent_analysis(score, level, d_scores, positive_count) # 这里参数顺序我修正了一下
+        analysis = generate_intelligent_analysis(score, level, positive_count, d_scores)
         writer.writerow(list(r) + [analysis])
 
     response = make_response(output.getvalue().encode('utf-8-sig'))
@@ -315,6 +326,84 @@ def export():
     response.headers["Content-type"] = "text/csv; charset=utf-8-sig"
     return response
 
+# ==================== 📄 生成并下载 Word 安全协议 ====================
+@app.route('/admin/download_agreement')
+def download_agreement():
+    sid = request.args.get('sid', '某某同学')
+    score = request.args.get('score', '20.0')
+    date_str = datetime.datetime.now().strftime('%Y年%m月%d日')
+
+    doc = Document()
+    
+    # 设置全局字体
+    doc.styles['Normal'].font.name = u'宋体'
+    doc.styles['Normal']._element.rPr.rFonts.set(qn('w:eastAsia'), u'宋体')
+
+    # 标题
+    title = doc.add_heading('家校共建学生心理健康安全协议', level=0)
+    title.alignment = 1
+    for run in title.runs:
+        run.font.name = u'黑体'
+        run._element.rPr.rFonts.set(qn('w:eastAsia'), u'黑体')
+
+    doc.add_paragraph(f'甲方（学校）：湖西学校 / 单县舜师高中')
+    doc.add_paragraph(f'乙方（学生监护人）：__________________（学生：{sid}）')
+    doc.add_paragraph(f'签订日期：{date_str}')
+    doc.add_paragraph('')
+    
+    content_paragraphs = [
+        f'鉴于近期学校在开展的心理健康普查中，测评系统提示该生（学号/代号：{sid}，综合预警指数：{score}分）存在一定的心理危机风险。为保障学生的心理健康与生命安全，明确学校与家庭在学生心理危机干预中的责任与义务，经甲乙双方友好协商，达成如下协议：',
+        '',
+        '一、 甲方的权利与义务',
+        '1. 甲方有义务向乙方如实反馈学生在校的心理测评结果及日常行为表现。',
+        '2. 甲方应尽最大努力在校内为学生提供心理辅导、危机干预、同伴支持及必要的安全监护。',
+        '3. 甲方有义务对学生的心理档案进行严格保密（保密例外原则除外：如涉及自伤、伤人、违法等情况，学校有权上报相关部门）。',
+        '4. 甲方不得因学生存在心理困扰而歧视学生或违规剥夺其受教育权。',
+        '',
+        '二、 乙方的权利与义务',
+        '1. 乙方（家长）作为学生的法定监护人，是学生心理安全的第一责任人。',
+        '2. 乙方在收到甲方通知后，应于 24 小时内配合学校，带学生前往专业医疗机构（如精神卫生中心、三甲医院心理科）进行权威诊断，并及时将诊断结果反馈给学校。',
+        '3. 乙方应遵照医嘱督促学生按时服药、定期复诊，不得擅自停药。',
+        '4. 乙方在家庭中应做好学生的 24 小时安全监护，严防自伤、自杀等极端事件发生。',
+        '',
+        '三、 危机处置与休复学机制',
+        '1. 若学生出现急性心理危机，甲方将立即启动应急预案并通知乙方。乙方应在接到通知后第一时间赶到学校或指定医院。',
+        '2. 若医疗机构建议学生需住院治疗或居家休养，乙方应积极配合办理请假或休学手续。',
+        '3. 学生申请复学时，乙方须向学校提供正规医疗机构出具的“具备复学条件”的医学证明，经学校心理危机干预小组评估通过后方可复学。复学后，乙方仍需按学校要求定期反馈学生恢复情况。',
+        '',
+        '四、 附则',
+        '1. 本协议一式两份，甲乙双方各执一份，自双方签字（盖章）之日起生效。',
+        '2. 本协议未尽事宜，由甲乙双方另行协商解决。',
+        '',
+        '甲方代表（班主任/心理老师）签字：_________________',
+        '联系电话：_________________',
+        '',
+        '乙方（学生监护人）签字：_________________',
+        '联系电话：_________________',
+        '日期：_______年____月____日'
+    ]
+
+    for p_text in content_paragraphs:
+        p = doc.add_paragraph(p_text)
+        p.paragraph_format.first_line_indent = Pt(24) # 首行缩进两字符
+        for run in p.runs:
+            run.font.name = u'宋体'
+            run._element.rPr.rFonts.set(qn('w:eastAsia'), u'宋体')
+            run.font.size = Pt(12)
+
+    # 将文档保存到内存中
+    file_stream = io.BytesIO()
+    doc.save(file_stream)
+    file_stream.seek(0)
+
+    return send_file(
+        file_stream,
+        as_attachment=True,
+        download_name=f"{sid}_家校心理安全协议.docx",
+        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    )
+
+# ==================== 启动服务 ====================
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8000))
     print(f"服务正在启动，监听端口: {port}")
